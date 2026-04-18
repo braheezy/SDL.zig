@@ -11,6 +11,7 @@ pub const Library = enum { SDL2, SDL2_ttf };
 
 pub fn build(b: *std.Build) !void {
     const sdk = Sdk.init(b, .{ .dep_name = null });
+    const io = b.graph.io;
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -29,24 +30,24 @@ pub fn build(b: *std.Build) !void {
             .root_module = lib_test_mod,
         });
         lib_test_mod.addImport("sdl-native", sdk.getNativeModule());
-        lib_test.linkSystemLibrary("sdl2_image");
-        lib_test.linkSystemLibrary("sdl2_ttf");
+        lib_test_mod.linkSystemLibrary("sdl2_image", .{});
+        lib_test_mod.linkSystemLibrary("sdl2_ttf", .{});
         if (lib_test.rootModuleTarget().isDarwinLibC()) {
             // SDL_TTF
-            lib_test.linkSystemLibrary("freetype");
-            lib_test.linkSystemLibrary("harfbuzz");
-            lib_test.linkSystemLibrary("bz2");
-            lib_test.linkSystemLibrary("zlib");
-            lib_test.linkSystemLibrary("graphite2");
+            lib_test_mod.linkSystemLibrary("freetype", .{});
+            lib_test_mod.linkSystemLibrary("harfbuzz", .{});
+            lib_test_mod.linkSystemLibrary("bz2", .{});
+            lib_test_mod.linkSystemLibrary("zlib", .{});
+            lib_test_mod.linkSystemLibrary("graphite2", .{});
 
             // SDL_IMAGE
-            lib_test.linkSystemLibrary("jpeg");
-            lib_test.linkSystemLibrary("libpng");
-            lib_test.linkSystemLibrary("tiff");
-            lib_test.linkSystemLibrary("sdl2");
-            lib_test.linkSystemLibrary("webp");
+            lib_test_mod.linkSystemLibrary("jpeg", .{});
+            lib_test_mod.linkSystemLibrary("libpng", .{});
+            lib_test_mod.linkSystemLibrary("tiff", .{});
+            lib_test_mod.linkSystemLibrary("sdl2", .{});
+            lib_test_mod.linkSystemLibrary("webp", .{});
         }
-        sdk.link(lib_test, .dynamic, .SDL2);
+        sdk.link(io, lib_test, .dynamic, .SDL2);
 
         const test_lib_step = b.step("test", "Runs the library tests.");
         test_lib_step.dependOn(&lib_test.step);
@@ -61,7 +62,7 @@ pub fn build(b: *std.Build) !void {
         .name = "demo-wrapper",
         .root_module = demo_wrapper_mod,
     });
-    sdk.link(demo_wrapper, sdl_linkage, .SDL2);
+    sdk.link(io, demo_wrapper, sdl_linkage, .SDL2);
     demo_wrapper_mod.addImport("sdl2", sdk.getWrapperModule());
     b.installArtifact(demo_wrapper);
 
@@ -74,13 +75,13 @@ pub fn build(b: *std.Build) !void {
         .name = "demo-wrapper-image",
         .root_module = demo_wrapper_image_mod,
     });
-    sdk.link(demo_wrapper_image, sdl_linkage, .SDL2);
+    sdk.link(io, demo_wrapper_image, sdl_linkage, .SDL2);
     demo_wrapper_image_mod.addImport("sdl2", sdk.getWrapperModule());
-    demo_wrapper_image.linkSystemLibrary("sdl2_image");
-    demo_wrapper_image.linkSystemLibrary("jpeg");
-    demo_wrapper_image.linkSystemLibrary("libpng");
-    demo_wrapper_image.linkSystemLibrary("tiff");
-    demo_wrapper_image.linkSystemLibrary("webp");
+    demo_wrapper_image_mod.linkSystemLibrary("sdl2_image", .{});
+    demo_wrapper_image_mod.linkSystemLibrary("jpeg", .{});
+    demo_wrapper_image_mod.linkSystemLibrary("libpng", .{});
+    demo_wrapper_image_mod.linkSystemLibrary("tiff", .{});
+    demo_wrapper_image_mod.linkSystemLibrary("webp", .{});
 
     if (target.query.isNative() and target.result.os.tag == .linux) {
         b.installArtifact(demo_wrapper_image);
@@ -95,7 +96,7 @@ pub fn build(b: *std.Build) !void {
         .name = "demo-native",
         .root_module = demo_native_mod,
     });
-    sdk.link(demo_native, sdl_linkage, .SDL2);
+    sdk.link(io, demo_native, sdl_linkage, .SDL2);
     demo_native_mod.addImport("sdl2", sdk.getNativeModule());
     b.installArtifact(demo_native);
 
@@ -237,8 +238,8 @@ fn linkLinuxCross(sdk: *Sdk, exe: *Compile) !void {
         .root_module = module,
         .linkage = .dynamic,
     });
-    build_linux_sdl_stub.addAssemblyFile(sdk.prepare_sources.getStubFile());
-    exe.linkLibrary(build_linux_sdl_stub);
+    module.addAssemblyFile(sdk.prepare_sources.getStubFile());
+    module.linkLibrary(build_linux_sdl_stub);
 }
 
 fn linkWindows(
@@ -248,8 +249,8 @@ fn linkWindows(
     comptime library: Library,
     paths: Paths,
 ) !void {
-    exe.addIncludePath(.{ .cwd_relative = paths.include });
-    exe.addLibraryPath(.{ .cwd_relative = paths.libs });
+    exe.root_module.addIncludePath(.{ .cwd_relative = paths.include });
+    exe.root_module.addLibraryPath(.{ .cwd_relative = paths.libs });
 
     const lib_name = switch (library) {
         .SDL2 => "SDL2",
@@ -264,7 +265,7 @@ fn linkWindows(
         const lib_path = try std.fs.path.join(sdk.builder.allocator, &[_][]const u8{ paths.libs, lib_file_name });
         defer sdk.builder.allocator.free(lib_path);
 
-        exe.addObjectFile(.{ .cwd_relative = lib_path });
+        exe.root_module.addObjectFile(.{ .cwd_relative = lib_path });
     } else {
         const file_name = try std.fmt.allocPrint(sdk.builder.allocator, "lib{s}.{s}", .{
             lib_name,
@@ -275,7 +276,7 @@ fn linkWindows(
         const lib_path = try std.fs.path.join(sdk.builder.allocator, &[_][]const u8{ paths.libs, file_name });
         defer sdk.builder.allocator.free(lib_path);
 
-        exe.addObjectFile(.{ .cwd_relative = lib_path });
+        exe.root_module.addObjectFile(.{ .cwd_relative = lib_path });
 
         if (linkage == .static and library == .SDL2) {
             const static_libs = [_][]const u8{
@@ -290,7 +291,7 @@ fn linkWindows(
                 "version",
                 "uuid",
             };
-            for (static_libs) |lib| exe.linkSystemLibrary(lib);
+            for (static_libs) |lib| exe.root_module.linkSystemLibrary(lib, .{});
         }
     }
 
@@ -307,30 +308,30 @@ fn linkWindows(
 }
 
 fn linkMacOS(exe: *Compile, comptime library: Library) !void {
-    exe.linkSystemLibrary(switch (library) {
+    exe.root_module.linkSystemLibrary(switch (library) {
         .SDL2 => "sdl2",
         .SDL2_ttf => "sdl2_ttf",
-    });
+    }, .{});
 
     switch (library) {
         .SDL2 => {
-            exe.linkFramework("Cocoa");
-            exe.linkFramework("CoreAudio");
-            exe.linkFramework("Carbon");
-            exe.linkFramework("Metal");
-            exe.linkFramework("QuartzCore");
-            exe.linkFramework("AudioToolbox");
-            exe.linkFramework("ForceFeedback");
-            exe.linkFramework("GameController");
-            exe.linkFramework("CoreHaptics");
-            exe.linkSystemLibrary("iconv");
+            exe.root_module.linkFramework("Cocoa", .{});
+            exe.root_module.linkFramework("CoreAudio", .{});
+            exe.root_module.linkFramework("Carbon", .{});
+            exe.root_module.linkFramework("Metal", .{});
+            exe.root_module.linkFramework("QuartzCore", .{});
+            exe.root_module.linkFramework("AudioToolbox", .{});
+            exe.root_module.linkFramework("ForceFeedback", .{});
+            exe.root_module.linkFramework("GameController", .{});
+            exe.root_module.linkFramework("CoreHaptics", .{});
+            exe.root_module.linkSystemLibrary("iconv", .{});
         },
         .SDL2_ttf => {
-            exe.linkSystemLibrary("freetype");
-            exe.linkSystemLibrary("harfbuzz");
-            exe.linkSystemLibrary("bz2");
-            exe.linkSystemLibrary("zlib");
-            exe.linkSystemLibrary("graphite2");
+            exe.root_module.linkSystemLibrary("freetype", .{});
+            exe.root_module.linkSystemLibrary("harfbuzz", .{});
+            exe.root_module.linkSystemLibrary("bz2", .{});
+            exe.root_module.linkSystemLibrary("zlib", .{});
+            exe.root_module.linkSystemLibrary("graphite2", .{});
         },
     }
 }
@@ -339,6 +340,7 @@ fn linkMacOS(exe: *Compile, comptime library: Library) !void {
 /// **Important:** The target of the `exe` must already be set, otherwise the Sdk will do the wrong thing!
 pub fn link(
     sdk: *Sdk,
+    io: std.Io,
     exe: *Compile,
     linkage: std.builtin.LinkMode,
     comptime library: Library,
@@ -347,7 +349,7 @@ pub fn link(
     const target = exe.root_module.resolved_target.?;
     const is_native = target.query.isNativeOs();
 
-    exe.linkLibC();
+    exe.root_module.link_libc = true;
 
     if (target.result.os.tag == .linux) {
         if (!is_native) {
@@ -359,15 +361,15 @@ pub fn link(
                 std.debug.panic("Cross-compilation not supported for {s} on Linux", .{@tagName(library)});
             }
         } else {
-            exe.linkSystemLibrary(switch (library) {
+            exe.root_module.linkSystemLibrary(switch (library) {
                 .SDL2 => "sdl2",
                 .SDL2_ttf => "sdl2_ttf",
-            });
+            }, .{});
         }
     } else if (target.result.os.tag == .windows) {
         const paths = switch (library) {
-            .SDL2 => getPaths(sdk, sdk.sdl_config_path, target, .SDL2),
-            .SDL2_ttf => getPaths(sdk, sdk.sdl_ttf_config_path, target, .SDL2_ttf),
+            .SDL2 => getPaths(io, sdk, sdk.sdl_config_path, target, .SDL2),
+            .SDL2_ttf => getPaths(io, sdk, sdk.sdl_ttf_config_path, target, .SDL2_ttf),
         } catch |err| {
             std.debug.panic("Failed to get paths for {s}: {s}", .{ @tagName(library), @errorName(err) });
         };
@@ -388,10 +390,10 @@ pub fn link(
         };
         defer b.allocator.free(triple_string);
         std.log.warn("Linking {s} for {s} is not tested, linking might fail!", .{ @tagName(library), triple_string });
-        exe.linkSystemLibrary(switch (library) {
+        exe.root_module.linkSystemLibrary(switch (library) {
             .SDL2 => "sdl2",
             .SDL2_ttf => "sdl2_ttf",
-        });
+        }, .{});
     }
 }
 
@@ -410,12 +412,13 @@ const GetPathsError = error{
 
 fn printPathsErrorMessage(
     sdk: *Sdk,
+    io: std.Io,
     config_path: []const u8,
     target_local: std.Build.ResolvedTarget,
     err: GetPathsError,
     library: Library,
 ) !void {
-    var stderr_writer = std.fs.File.stderr().writer(&.{});
+    var stderr_writer = std.Io.File.stderr().writer(io, &.{});
     const writer = &stderr_writer.interface;
     const target_name = try tripleName(sdk.builder.allocator, target_local);
     defer sdk.builder.allocator.free(target_name);
@@ -474,10 +477,10 @@ fn printPathsErrorMessage(
     try writer.flush();
 }
 
-fn getPaths(sdk: *Sdk, config_path: []const u8, target_local: std.Build.ResolvedTarget, library: Library) GetPathsError!Paths {
-    const json_data = std.fs.cwd().readFileAlloc(sdk.builder.allocator, config_path, 1 << 20) catch |err| switch (err) {
+fn getPaths(io: std.Io, sdk: *Sdk, config_path: []const u8, target_local: std.Build.ResolvedTarget, library: Library) GetPathsError!Paths {
+    const json_data = std.Io.Dir.cwd().readFileAlloc(io, config_path, sdk.builder.allocator, .limited(1 << 20)) catch |err| switch (err) {
         error.FileNotFound => {
-            printPathsErrorMessage(sdk, config_path, target_local, GetPathsError.FileNotFound, library) catch |e| {
+            printPathsErrorMessage(sdk, io, config_path, target_local, GetPathsError.FileNotFound, library) catch |e| {
                 std.debug.panic("Failed to print error message: {s}", .{@errorName(e)});
             };
             return GetPathsError.FileNotFound;
@@ -490,7 +493,7 @@ fn getPaths(sdk: *Sdk, config_path: []const u8, target_local: std.Build.Resolved
     defer sdk.builder.allocator.free(json_data);
 
     const parsed = std.json.parseFromSlice(std.json.Value, sdk.builder.allocator, json_data, .{}) catch {
-        printPathsErrorMessage(sdk, config_path, target_local, GetPathsError.InvalidJson, library) catch |e| {
+        printPathsErrorMessage(sdk, io, config_path, target_local, GetPathsError.InvalidJson, library) catch |e| {
             std.debug.panic("Failed to print error message: {s}", .{@errorName(e)});
         };
         return GetPathsError.InvalidJson;
@@ -523,7 +526,7 @@ fn getPaths(sdk: *Sdk, config_path: []const u8, target_local: std.Build.Resolved
         };
     }
 
-    printPathsErrorMessage(sdk, config_path, target_local, GetPathsError.MissingTarget, library) catch |e| {
+    printPathsErrorMessage(sdk, io, config_path, target_local, GetPathsError.MissingTarget, library) catch |e| {
         std.debug.panic("Failed to print error message: {s}", .{@errorName(e)});
     };
     return GetPathsError.MissingTarget;
@@ -563,19 +566,32 @@ const PrepareStubSourceStep = struct {
     fn make(step: *Step, make_opt: std.Build.Step.MakeOptions) !void {
         _ = make_opt;
         const self: *Self = @fieldParentPtr("step", step);
+        const b = self.sdk.builder;
+        const io = b.graph.io;
 
-        var cache = CacheBuilder.init(self.sdk.builder, "sdl");
+        var man = b.graph.cache.obtain();
+        defer man.deinit();
 
-        cache.addBytes(sdl2_symbol_definitions);
+        man.hash.addBytes(sdl2_symbol_definitions);
 
-        var dirpath = try cache.createAndGetDir();
-        defer dirpath.dir.close();
+        const digest = man.final();
+        const cache_path = "o" ++ std.fs.path.sep_str ++ digest;
+        self.assembly_source.path = try b.cache_root.join(b.allocator, &.{ cache_path, "sdl.S" });
 
-        var file = try dirpath.dir.createFile("sdl.S", .{});
-        defer file.close();
+        if (try step.cacheHit(&man)) {
+            return;
+        }
+
+        b.cache_root.handle.createDirPath(io, cache_path) catch |err| {
+            return step.fail("unable to make path {s}: {s}", .{ cache_path, @errorName(err) });
+        };
+
+        const file_sub_path = try std.fs.path.join(b.allocator, &.{ cache_path, "sdl.S" });
+        var file = try b.cache_root.handle.createFile(io, file_sub_path, .{});
+        defer file.close(io);
 
         var file_buff: [1024]u8 = undefined;
-        var file_writer = file.writer(&file_buff);
+        var file_writer = file.writer(io, &file_buff);
         const writer = &file_writer.interface;
         try writer.writeAll(".text\n");
 
@@ -591,10 +607,7 @@ const PrepareStubSourceStep = struct {
         }
         try writer.flush();
 
-        self.assembly_source.path = try std.fs.path.join(self.sdk.builder.allocator, &[_][]const u8{
-            dirpath.path,
-            "sdl.S",
-        });
+        try step.writeManifest(&man);
     }
 };
 
@@ -605,81 +618,3 @@ fn tripleName(allocator: std.mem.Allocator, target_local: std.Build.ResolvedTarg
 
     return std.fmt.allocPrint(allocator, "{s}-{s}-{s}", .{ arch_name, os_name, abi_name });
 }
-
-const CacheBuilder = struct {
-    const Self = @This();
-
-    builder: *std.Build,
-    hasher: std.crypto.hash.Sha1,
-    subdir: ?[]const u8,
-
-    pub fn init(builder: *std.Build, subdir: ?[]const u8) Self {
-        return Self{
-            .builder = builder,
-            .hasher = std.crypto.hash.Sha1.init(.{}),
-            .subdir = if (subdir) |s|
-                builder.dupe(s)
-            else
-                null,
-        };
-    }
-
-    pub fn addBytes(self: *Self, bytes: []const u8) void {
-        self.hasher.update(bytes);
-    }
-
-    pub fn addFile(self: *Self, file: LazyPath) !void {
-        const path = file.getPath(self.builder);
-
-        const data = try std.fs.cwd().readFileAlloc(self.builder.allocator, path, 1 << 32); // 4 GB
-        defer self.builder.allocator.free(data);
-
-        self.addBytes(data);
-    }
-
-    fn createPath(self: *Self) ![]const u8 {
-        var hash: [20]u8 = undefined;
-        self.hasher.final(&hash);
-
-        const cache_root = self.builder.cache_root.path orelse ".zig-cache";
-        const path = if (self.subdir) |subdir|
-            try std.fmt.allocPrint(
-                self.builder.allocator,
-                "{s}/{s}/o/{x}",
-                .{
-                    cache_root,
-                    subdir,
-                    &hash,
-                },
-            )
-        else
-            try std.fmt.allocPrint(
-                self.builder.allocator,
-                "{s}/o/{x}",
-                .{
-                    cache_root,
-                    &hash,
-                },
-            );
-
-        return path;
-    }
-
-    pub const DirAndPath = struct {
-        dir: std.fs.Dir,
-        path: []const u8,
-    };
-    pub fn createAndGetDir(self: *Self) !DirAndPath {
-        const path = try self.createPath();
-        return DirAndPath{
-            .path = path,
-            .dir = try std.fs.cwd().makeOpenPath(path, .{}),
-        };
-    }
-
-    pub fn createAndGetPath(self: *Self) ![]const u8 {
-        const path = try self.createPath();
-        try std.fs.cwd().makePath(path);
-        return path;
-    }
-};
