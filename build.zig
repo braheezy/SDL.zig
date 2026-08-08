@@ -307,11 +307,31 @@ fn linkWindows(
     }
 }
 
-fn linkMacOS(exe: *Compile, comptime library: Library) !void {
+fn addMacOSLibraryPath(sdk: *Sdk, exe: *Compile) void {
+    const b = sdk.builder;
+    const sdl_config = b.findProgram(&.{"sdl2-config"}, &.{}) catch return;
+
+    var exit_code: u8 = undefined;
+    const stdout = b.runAllowFail(
+        &.{ sdl_config, "--prefix" },
+        &exit_code,
+        .ignore,
+    ) catch return;
+    const prefix = std.mem.trim(u8, stdout, " \t\r\n");
+    if (prefix.len == 0) return;
+
+    exe.root_module.addLibraryPath(.{
+        .cwd_relative = b.pathJoin(&.{ prefix, "lib" }),
+    });
+}
+
+fn linkMacOS(sdk: *Sdk, exe: *Compile, comptime library: Library) !void {
+    addMacOSLibraryPath(sdk, exe);
+
     exe.root_module.linkSystemLibrary(switch (library) {
-        .SDL2 => "sdl2",
-        .SDL2_ttf => "sdl2_ttf",
-    }, .{});
+        .SDL2 => "SDL2",
+        .SDL2_ttf => "SDL2_ttf",
+    }, .{ .preferred_link_mode = .dynamic });
 
     switch (library) {
         .SDL2 => {
@@ -326,13 +346,8 @@ fn linkMacOS(exe: *Compile, comptime library: Library) !void {
             exe.root_module.linkFramework("CoreHaptics", .{});
             exe.root_module.linkSystemLibrary("iconv", .{});
         },
-        .SDL2_ttf => {
-            exe.root_module.linkSystemLibrary("freetype", .{});
-            exe.root_module.linkSystemLibrary("harfbuzz", .{});
-            exe.root_module.linkSystemLibrary("bz2", .{});
-            exe.root_module.linkSystemLibrary("zlib", .{});
-            exe.root_module.linkSystemLibrary("graphite2", .{});
-        },
+        // The dynamic SDL_ttf library records its own dependencies.
+        .SDL2_ttf => {},
     }
 }
 
@@ -381,7 +396,7 @@ pub fn link(
         if (!host_system.os.tag.isDarwin()) {
             std.debug.panic("Cross-compilation not supported for {s} on macOS", .{@tagName(library)});
         }
-        linkMacOS(exe, library) catch |err| {
+        linkMacOS(sdk, exe, library) catch |err| {
             std.debug.panic("Failed to link {s} for macOS: {s}", .{ @tagName(library), @errorName(err) });
         };
     } else {
