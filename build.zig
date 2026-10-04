@@ -121,7 +121,6 @@ const host_system = @import("builtin").target;
 const Build = std.Build;
 const Step = Build.Step;
 const LazyPath = Build.LazyPath;
-const GeneratedFile = Build.GeneratedFile;
 const Compile = Build.Step.Compile;
 
 const Sdk = @This();
@@ -147,12 +146,12 @@ pub fn init(b: *Build, opt: SdkOption) *Sdk {
 
     const sdl_config_path = opt.maybe_config_path orelse std.fs.path.join(
         b.allocator,
-        &[_][]const u8{ b.pathFromRoot(".build_config"), "sdl.json" },
+        &[_][]const u8{ b.root.joinString(b.allocator, ".build_config") catch @panic("out of memory"), "sdl.json" },
     ) catch @panic("out of memory");
 
     const sdl_ttf_config_path = opt.maybe_sdl_ttf_config_path orelse std.fs.path.join(
         b.allocator,
-        &[_][]const u8{ b.pathFromRoot(".build_config"), "sdl_ttf.json" },
+        &[_][]const u8{ b.root.joinString(b.allocator, ".build_config") catch @panic("out of memory"), "sdl_ttf.json" },
     ) catch @panic("out of memory");
 
     const builder = if (opt.dep_name) |name|
@@ -309,7 +308,7 @@ fn linkWindows(
 
 fn addMacOSLibraryPath(sdk: *Sdk, exe: *Compile) void {
     const b = sdk.builder;
-    const sdl_config = b.findProgram(&.{"sdl2-config"}, &.{}) catch return;
+    const sdl_config = b.findProgram(.{ .names = &.{"sdl2-config"} }) orelse return;
 
     var exit_code: u8 = undefined;
     const stdout = b.runAllowFail(
@@ -548,81 +547,27 @@ fn getPaths(io: std.Io, sdk: *Sdk, config_path: []const u8, target_local: std.Bu
 }
 
 const PrepareStubSourceStep = struct {
-    const Self = @This();
-
-    step: Step,
-    sdk: *Sdk,
-
-    assembly_source: GeneratedFile,
+    source: LazyPath,
 
     pub fn create(sdk: *Sdk) *PrepareStubSourceStep {
-        const psss = sdk.builder.allocator.create(Self) catch @panic("out of memory");
-
-        psss.* = .{
-            .step = Step.init(
-                .{
-                    .id = .custom,
-                    .name = "Prepare SDL2 stub sources",
-                    .owner = sdk.builder,
-                    .makeFn = make,
-                },
-            ),
-            .sdk = sdk,
-            .assembly_source = .{ .step = &psss.step },
-        };
-
-        return psss;
-    }
-
-    pub fn getStubFile(self: *Self) LazyPath {
-        return .{ .generated = .{ .file = &self.assembly_source } };
-    }
-
-    fn make(step: *Step, make_opt: std.Build.Step.MakeOptions) !void {
-        _ = make_opt;
-        const self: *Self = @fieldParentPtr("step", step);
-        const b = self.sdk.builder;
-        const io = b.graph.io;
-
-        var man = b.graph.cache.obtain();
-        defer man.deinit();
-
-        man.hash.addBytes(sdl2_symbol_definitions);
-
-        const digest = man.final();
-        const cache_path = "o" ++ std.fs.path.sep_str ++ digest;
-        self.assembly_source.path = try b.cache_root.join(b.allocator, &.{ cache_path, "sdl.S" });
-
-        if (try step.cacheHit(&man)) {
-            return;
-        }
-
-        b.cache_root.handle.createDirPath(io, cache_path) catch |err| {
-            return step.fail("unable to make path {s}: {s}", .{ cache_path, @errorName(err) });
-        };
-
-        const file_sub_path = try std.fs.path.join(b.allocator, &.{ cache_path, "sdl.S" });
-        var file = try b.cache_root.handle.createFile(io, file_sub_path, .{});
-        defer file.close(io);
-
-        var file_buff: [1024]u8 = undefined;
-        var file_writer = file.writer(io, &file_buff);
-        const writer = &file_writer.interface;
-        try writer.writeAll(".text\n");
+        const b = sdk.builder;
+        const self = b.allocator.create(PrepareStubSourceStep) catch @panic("out of memory");
+        var output: std.Io.Writer.Allocating = .init(b.allocator);
+        const writer = &output.writer;
+        writer.writeAll(".text\n") catch @panic("out of memory");
 
         var iter = std.mem.splitScalar(u8, sdl2_symbol_definitions, '\n');
         while (iter.next()) |line| {
             const sym = std.mem.trim(u8, line, " \r\n\t");
-            if (sym.len == 0)
-                continue;
-            try writer.print(".global {s}\n", .{sym});
-            try writer.writeAll(".align 4\n");
-            try writer.print("{s}:\n", .{sym});
-            try writer.writeAll("  .byte 0\n");
+            if (sym.len == 0) continue;
+            writer.print(".global {s}\n.align 4\n{s}:\n  .byte 0\n", .{ sym, sym }) catch @panic("out of memory");
         }
-        try writer.flush();
+        self.* = .{ .source = b.addWriteFiles().add("sdl.S", output.written()) };
+        return self;
+    }
 
-        try step.writeManifest(&man);
+    pub fn getStubFile(self: *PrepareStubSourceStep) LazyPath {
+        return self.source;
     }
 };
 
